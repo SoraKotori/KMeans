@@ -3,153 +3,157 @@
 #include <functional>
 #include <random>
 #include <vector>
+#include <numeric>
 
-namespace clustering
+namespace Clustering
 {
-    using namespace std;
-    using namespace placeholders;
+	template<typename Type>
+	class KMeans
+	{
+	public:
+		typedef typename std::vector<Type>::size_type SizeType;
+		typedef typename std::vector<Type>::iterator Iterator;
 
-    template<typename _Type>
-    class KMeans
-    {
-    public:
-        typedef typename vector<_Type>::size_type size_type;
-        typedef typename vector<_Type>::iterator iterator;
+		KMeans() = default;
+		~KMeans() = default;
 
-        KMeans() = default;
-        ~KMeans() = default;
+		KMeans(SizeType Dimension, SizeType Cluster) :
+			mPrevCenter(Cluster, std::vector<Type>(Dimension)),
+			mCenter(Cluster, std::vector<Type>(Dimension)),
+			mCenterDataCount(Cluster)
+		{
+		}
 
-        KMeans(size_type _Cluster, size_type _Dimension) :
-            _PrevCenter(_Cluster, vector<_Type>(_Dimension)),
-            _Center(_Cluster, vector<_Type>(_Dimension)),
-            _CenterDataCount(_Cluster)
-        {
-        }
+		template<typename ForwardIteratorType, typename... ArgsType>
+		KMeans(ForwardIteratorType First, ForwardIteratorType Last, SizeType Cluster, ArgsType&&... Args) :
+			KMeans(First->size(), Cluster)
+		{
+			ResetCenterFromData(First, Last, std::forward<ArgsType>(Args)...);
+		}
 
-        template<typename _ForwardIterator, typename... _Args>
-        KMeans(size_type _Cluster, _ForwardIterator __first, _ForwardIterator __last, _Args&&... __args) :
-            KMeans(_Cluster, __first->size())
-        {
-            ResetCenterFromData(__first, __last, forward<_Args>(__args)...);
-        }
+		template<typename ForwardIteratorType, typename... ArgsType>
+		void ResetCenterFromData(ForwardIteratorType First, ForwardIteratorType Last, ArgsType&&... Args)
+		{
+			std::vector<std::reference_wrapper<const std::vector<Type>>> RandomData(First, Last);
+			std::shuffle(RandomData.begin(), RandomData.end(), std::default_random_engine(std::forward<ArgsType>(Args)...));
+			std::copy_n(RandomData.begin(), mPrevCenter.size(), mPrevCenter.begin());
+		}
 
-        template<typename _ForwardIterator, typename... _Args>
-        void ResetCenterFromData(_ForwardIterator __first, _ForwardIterator __last, _Args&&... __args)
-        {
-            vector<reference_wrapper<const vector<_Type>>> _RandomData(__first, __last);
-            shuffle(_RandomData.begin(), _RandomData.end(), default_random_engine(forward<_Args>(__args)...));
-            copy_n(_RandomData.begin(), _PrevCenter.size(), _PrevCenter.begin());
-        }
+		template<typename ForwardIteratorType>
+		auto GetDataCluster(ForwardIteratorType First, ForwardIteratorType Last)
+		{
+			auto FirstCenter = std::begin(mPrevCenter);
+			auto LastCenter = std::end(mPrevCenter);
 
-        template<typename _ForwardIterator>
-        auto GetDataCluster(_ForwardIterator __first, _ForwardIterator __last)
-        {
-            auto _FirstCenter = _PrevCenter.begin();
-            auto _LastCenter = _PrevCenter.end();
+			auto MinDistance = EuclideanDistanceSquared(First, Last, FirstCenter->begin());
+			auto FoundCenter = FirstCenter;
 
-            if (_FirstCenter == _LastCenter)
-            {
-                return typename iterator_traits<iterator>::difference_type(-1);
-            }
+			while (++FirstCenter != LastCenter)
+			{
+				auto Distance = EuclideanDistanceSquared(First, Last, FirstCenter->begin());
+				if (MinDistance > Distance)
+				{
+					MinDistance = Distance;
+					FoundCenter = FirstCenter;
+				}
+			}
 
-            auto _MinDistance = SumSquares(__first, __last, _FirstCenter->begin(), _Type(0));
-            auto _FoundCenter = _FirstCenter;
+			return distance(mPrevCenter.begin(), FoundCenter);
+		}
 
-            while (++_FirstCenter != _LastCenter)
-            {
-                auto _Distance = SumSquares(__first, __last, _FirstCenter->begin(), _Type(0));
-                if (_MinDistance > _Distance)
-                {
-                    _MinDistance = _Distance;
-                    _FoundCenter = _FirstCenter;
-                }
-            }
+		auto GetCenter()
+		{
+			return mCenter;
+		}
 
-            return distance(_PrevCenter.begin(), _FoundCenter);
-        }
+		template<typename... ArgsType>
+		bool Run(ArgsType&&... Args)
+		{
+			UpdateCenter(std::forward<ArgsType>(Args)...);
+			swap(mPrevCenter, mCenter);
 
-        auto GetCenter()
-        {
-            return _Center;
-        }
+			bool Converged = mPrevCenter == mCenter;
+			return !Converged;
+		}
 
-        template<typename... _Args>
-        bool Run(_Args&&... __args)
-        {
-            UpdateCenter(forward<_Args>(__args)...);
-            swap(_PrevCenter, _Center);
+	private:
+		std::vector<std::vector<Type>> mPrevCenter;
+		std::vector<std::vector<Type>> mCenter;
+		std::vector<Type> mCenterDataCount;
 
-            bool _Converged = _PrevCenter == _Center;
-            return !_Converged;
-        }
+		template<typename InputIterator1, typename InputIterator2>
+		static Type EuclideanDistanceSquared(InputIterator1 First1, InputIterator1 Last1, InputIterator2 First2)
+		{
+			return std::transform_reduce(First1, Last1, First2, Type(0), std::plus<Type>(),
+				std::bind(std::pow<Type, Type>, std::bind(std::minus<Type>(), std::placeholders::_1, std::placeholders::_2), 2));
+		}
 
-    private:
-        vector<vector<_Type>> _PrevCenter;
-        vector<vector<_Type>> _Center;
-        vector<_Type> _CenterDataCount;
+		template<typename... ArgsType>
+		static Type EuclideanDistance(ArgsType&&... Args)
+		{
+			return sqrt(EuclideanDistanceSquared(forward<ArgsType>(Args)...));
+		}
 
-        template<typename _InputIterator1, typename _InputIterator2>
-        static _Type SumSquares(_InputIterator1 __first1, _InputIterator1 __last1,
-            _InputIterator2 __first2, _Type __init)
-        {
-            for (; __first1 != __last1; ++__first1, ++__first2)
-            {
-                _Type __minus = *__first1 - *__first2;
-                __init += __minus * __minus;
-            }
+		template<typename ForwardIteratorType>
+		void CenterAddData(ForwardIteratorType First, ForwardIteratorType Last)
+		{
+			auto EuclideanDistanceSquaredSequence = std::vector<Type>(std::size(mPrevCenter));
+			std::transform(std::begin(mPrevCenter), std::end(mPrevCenter), std::begin(EuclideanDistanceSquaredSequence), [First, Last](const std::vector<Type>& PrevCenter)
+				{
+					return std::transform_reduce(First, Last, std::begin(PrevCenter), Type(0), std::plus<Type>(),
+						std::bind(std::pow<Type, Type>, std::bind(std::minus<Type>(), std::placeholders::_1, std::placeholders::_2), 2));
+				});
 
-            return __init;
-        }
+			auto MinimumIndex = std::distance(std::begin(EuclideanDistanceSquaredSequence), std::min_element(std::begin(EuclideanDistanceSquaredSequence), std::end(EuclideanDistanceSquaredSequence)));
+			std::transform(First, Last, std::begin(mCenter[MinimumIndex]), std::begin(mCenter[MinimumIndex]), std::plus<Type>());
 
-        template<typename... _Args>
-        static _Type EuclideanDistance(_Args&&... __args)
-        {
-            return sqrt(SumSquares(forward<_Args>(__args)...));
-        }
+			mCenterDataCount[MinimumIndex]++;
+		}
 
-        template<typename _ForwardIterator>
-        void CenterAddData(_ForwardIterator __first, _ForwardIterator __last)
-        {
-            auto _CenterIndex = GetDataCluster(__first, __last);
-            _CenterDataCount[_CenterIndex]++;
+		template<typename ForwardIteratorType, typename OutputIterator>
+		void CenterDivideCount(ForwardIteratorType First, ForwardIteratorType Last, OutputIterator Result)
+		{
+			for (; First != Last; ++First, ++Result)
+			{
+				const auto Count = *First;
+				for (auto& Value : *Result)
+				{
+					Value /= Count;
+				}
+			}
+		}
 
-            auto __result = _Center[_CenterIndex].begin();
-            for (; __first != __last; ++__first, ++__result)
-            {
-                *__result += *__first;
-            }
-        }
+		template<typename ForwardIteratorType>
+		void UpdateCenter(ForwardIteratorType First, ForwardIteratorType Last)
+		{
+			// Center set zero
+			std::for_each(std::begin(mCenter), std::end(mCenter), [](std::vector<Type>& Center)
+				{
+					std::fill(std::begin(Center), std::end(Center), Type(0));
+				});
+			std::fill(mCenterDataCount.begin(), mCenterDataCount.end(), Type(0));
 
-        template<typename _ForwardIterator, typename _OutputIterator>
-        void CenterDivideCount(_ForwardIterator __first, _ForwardIterator __last, _OutputIterator __result)
-        {
-            for (; __first != __last; ++__first, ++__result)
-            {
-                const auto _Count = *__first;
-                for (auto& _Value : *__result)
-                {
-                    _Value /= _Count;
-                }
-            }
-        }
+			// Assignment and Update
+			std::for_each(First, Last, [this](const std::vector<Type>& Point)
+				{
+					auto EuclideanDistanceSquaredSequence = std::vector<Type>(std::size(mPrevCenter));
+					std::transform(std::begin(mPrevCenter), std::end(mPrevCenter), std::begin(EuclideanDistanceSquaredSequence), [&Point](const std::vector<Type>& PrevCenter)
+						{
+							return std::transform_reduce(std::begin(Point), std::end(Point), std::begin(PrevCenter), Type(0), std::plus<Type>(),
+								std::bind(std::pow<Type, Type>, std::bind(std::minus<Type>(), std::placeholders::_1, std::placeholders::_2), 2));
+						});
 
-        template<typename _ForwardIterator>
-        void UpdateCenter(_ForwardIterator __first, _ForwardIterator __last)
-        {
-            // Center set zero
-            for (auto& _vCenter : _Center)
-            {
-                fill(_vCenter.begin(), _vCenter.end(), _Type(0));
-            }
-            fill(_CenterDataCount.begin(), _CenterDataCount.end(), _Type(0));
+					auto MinimumIndex = std::distance(std::begin(EuclideanDistanceSquaredSequence), std::min_element(std::begin(EuclideanDistanceSquaredSequence), std::end(EuclideanDistanceSquaredSequence)));
+					std::transform(std::begin(Point), std::end(Point), std::begin(mCenter[MinimumIndex]), std::begin(mCenter[MinimumIndex]), std::plus<Type>());
 
-            // Assignment and Update
-            for (; __first != __last; ++__first)
-            {
-                CenterAddData(__first->begin(), __first->end());
-            }
+					mCenterDataCount[MinimumIndex]++;
+				});
 
-            CenterDivideCount(_CenterDataCount.begin(), _CenterDataCount.end(), _Center.begin());
-        }
-    };
+			std::transform(std::begin(mCenterDataCount), std::end(mCenterDataCount), std::begin(mCenter), std::begin(mCenter), [](const Type DataCount, std::vector<Type>& PrevCenter)
+				{
+					std::transform(std::begin(PrevCenter), std::end(PrevCenter), std::begin(PrevCenter), std::bind(std::divides<Type>(), std::placeholders::_1, DataCount));
+					return PrevCenter;
+				});
+		}
+	};
 }
